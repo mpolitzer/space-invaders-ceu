@@ -1,0 +1,258 @@
+#include "sdl.ceu"
+
+input void SDL_REDRAW;
+input void SDL_QUIT;
+input int  SDL_DT;
+input _SDL_KeyboardEvent&& SDL_KEYDOWN;
+input _SDL_KeyboardEvent&& SDL_KEYUP;
+input _SDL_MouseButtonEvent&& SDL_MOUSEBUTTONDOWN;
+
+var _SDL_Window&? window;
+    finalize
+        window = &_SDL_CreateWindow("Jogo",
+                    _SDL_WINDOWPOS_UNDEFINED,
+                    _SDL_WINDOWPOS_UNDEFINED,
+                    640, 480, _SDL_WINDOW_SHOWN);
+    with
+        _SDL_DestroyWindow(&&window!);
+    end
+
+var _SDL_Renderer&? renderer;
+    finalize
+        renderer = &_SDL_CreateRenderer(&&window!, -1, 0);
+    with
+        _SDL_DestroyRenderer(&&renderer!);
+    end
+
+class Cloud with
+    var _SDL_Renderer& ren;
+    var _SDL_Rect      r;
+    var int            vx;
+do
+    var int x = -this.r.w * 1000;
+    par do
+        every dt in SDL_DT do
+            x = x + this.vx*dt;
+            if x > 640000 then
+                x = 0;
+            end
+        end
+    with
+        every SDL_REDRAW do
+            _SDL_SetRenderDrawColor(&&this.ren,
+                                    0xDD,0xDD,0xDD,0xFF);
+            this.r.x = x / 1000;
+            _SDL_RenderFillRect(&&this.ren, &&this.r);
+        end
+    end
+end
+
+class PlayerBullet with
+    var _SDL_Renderer& ren;
+    var _SDL_Rect      r;
+    var int            vx;
+    var int            vy;
+    event void go_collide;
+do
+    var float y = this.r.y;
+    par do
+        loop do
+            var int dt = await SDL_DT;
+            y = y - (this.vy*dt)/1000.0;
+            this.r.y = y;
+            if this.r.y < 0 then
+                escape 0;
+            end
+        end
+    with
+        await go_collide;
+        escape 0;
+    with
+        every SDL_REDRAW do
+            _SDL_SetRenderDrawColor(&&this.ren,
+                                    0xFF,0x00,0x00,0xFF);
+            _SDL_RenderFillRect(&&this.ren, &&this.r);
+        end
+    end
+end
+
+class Invader with
+    var _SDL_Renderer& ren;
+    var _SDL_Rect      r;
+    var int            vx;
+    var int            vy;
+    event void go_collide;
+do
+    var float x = this.r.x;
+    par do
+        await go_collide;
+        escape 0;
+    with
+        every dt in SDL_DT do
+            if this.r.x > 640 then
+                x = -this.r.w;
+            end
+            x = x + (this.vx*dt)/1000.0;
+            this.r.x = x;
+        end
+    with
+        every SDL_REDRAW do
+            _SDL_SetRenderDrawColor(&&this.ren,
+                                    0x44,0xDD,0x44,0xFF);
+            _SDL_RenderFillRect(&&this.ren, &&this.r);
+        end
+    end
+end
+
+class Player with
+    event void i_want_to_exit;
+    var _SDL_Renderer& ren;
+    pool PlayerBullet[3] &bullets;
+do
+    var int x = (640/2 - 20/2) * 1000;
+    var int y = (480-50) * 1000;
+    var int vx = 0;
+    var int vy = 0;
+
+    var _SDL_Rect r = _SDL_Rect(0,0, 20,50);
+
+    par do
+        every dt in SDL_DT do
+            x = x + vx*dt;
+            y = y + vy*dt;
+        end
+    with
+        par do
+            loop do
+                var _SDL_KeyboardEvent&& key;
+                key = await SDL_KEYDOWN until key:keysym.sym==_SDLK_a;
+                vx = vx -100;
+                key = await SDL_KEYUP   until key:keysym.sym==_SDLK_a;
+                vx = vx +100;
+            end
+        with
+            loop do
+                var _SDL_KeyboardEvent&& key;
+                key = await SDL_KEYDOWN until key:keysym.sym==_SDLK_SPACE;
+                _printf("Pew\n");
+                spawn PlayerBullet in bullets with
+                    this.ren = &ren;
+                    this.r   = _SDL_Rect(x/1000+r.w/2-2.5, y/1000, 5, 5);
+                    this.vx  = 0;
+                    this.vy  = 200;
+                end;
+                key = await SDL_KEYUP   until key:keysym.sym==_SDLK_SPACE;
+            end
+        with
+            loop do
+                var _SDL_KeyboardEvent&& key;
+                key = await SDL_KEYDOWN until key:keysym.sym==_SDLK_d;
+                vx = vx +100;
+                key = await SDL_KEYUP   until key:keysym.sym==_SDLK_d;
+                vx = vx -100;
+            end
+        end
+    with
+        every SDL_REDRAW do
+            _SDL_SetRenderDrawColor(&&this.ren,
+                                    0x00,0x00,0x00,0x00);
+            r.x = x / 1000;
+            r.y = y / 1000;
+            _SDL_RenderFillRect(&&this.ren, &&r);
+        end
+    end
+end
+
+_srand(_time(null));
+
+par/or do
+    await SDL_QUIT;
+with
+    every SDL_REDRAW do
+        _SDL_SetRenderDrawColor(&&renderer!,
+                                0xFF,0xFF,0xFF,0x00);
+        _SDL_RenderFillRect(&&renderer!, null);
+    end
+with
+    var Cloud[3] _ with
+        var int w = 50 + _rand()%200;
+        var int h = 20 + _rand()%50;
+        var int y = h + _rand()%200;
+        this.ren = &renderer!;
+        this.r   = _SDL_Rect(0,y,w,h);
+        this.vx  = 10 + _rand()%50;
+    end;
+    await FOREVER;
+with
+    pool Invader[] invaders;
+    pool PlayerBullet[3] bullets;
+    par do
+        do Player with
+            this.ren = &renderer!;
+            this.bullets = &bullets;
+        end;
+    with
+        var int x = 0;
+        loop i in 10 do
+            spawn Invader in invaders with
+                this.ren = &renderer!;
+                this.r   = _SDL_Rect(-50 + x, 50+(_rand()%2)*70, 50, 50);
+                this.vx  = 100;
+                this.vy  = 0;
+                x = x + 60;
+            end;
+        end;
+        every 5s do
+            spawn Invader in invaders with
+                this.ren = &renderer!;
+                this.r   = _SDL_Rect(-50, 50+(_rand()%2)*70, 50, 50);
+                this.vx  = 100;
+                this.vy  = 0;
+            end;
+        end;
+    with
+        loop do
+            var _SDL_KeyboardEvent&& key;
+            key = await SDL_KEYDOWN until key:keysym.sym==_SDLK_RETURN;
+            spawn Invader in invaders with
+                this.ren = &renderer!;
+                this.r   = _SDL_Rect(-50, 50, 50, 50);
+                this.vx  = 100;
+                this.vy  = 0;
+            end;
+        end;
+    with
+        every SDL_DT do
+            var Invader&&?[] is;
+            var PlayerBullet&&?[] bs;
+            loop b in bullets do
+                loop i in invaders do
+                    if _SDL_HasIntersection(&&b:r, &&i:r) then
+                        is = []..is..[i];
+                        bs = []..bs..[b];
+                        _printf("BANG\n");
+                    end;
+                end;
+            end;
+            loop i in $is do
+                if (is[i]?) then emit is[i]!:go_collide; end
+            end
+            loop b in $bs do
+                if (bs[b]?) then emit bs[b]!:go_collide; end
+            end
+        end
+    end
+with
+    loop do
+        var _SDL_KeyboardEvent&& key;
+        key = await SDL_KEYDOWN until key:keysym.sym==_SDLK_ESCAPE;
+        escape 0;
+    end
+with
+    every SDL_REDRAW do
+        _SDL_RenderPresent(&&renderer!);
+    end
+end
+
+escape 0;
+
